@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math' show min;
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:PiliPlus/common/style.dart';
@@ -60,6 +60,7 @@ import 'package:PiliPlus/utils/extension/nested_scroll_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:PiliPlus/utils/parse_string.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -791,6 +792,9 @@ class VideoDetailController extends GetxController
 
   Volume? volume;
 
+  static final _ddlRegexp = RegExp(r'deadline=(\d+)');
+  Timer? videoExpiredTimer;
+
   // 视频链接
   /// TODO: merge [DownloadHttp.getVideoUrl].
   Future<void> queryVideoUrl({
@@ -903,7 +907,7 @@ class VideoDetailController extends GetxController
         }
       }
 
-      final List<VideoItem> videoList = data.dash!.video!;
+      final videoList = data.dash!.video!;
       // if (kDebugMode) debugPrint("allVideosList:${allVideosList}");
       // 当前可播放的最高质量视频
       final curHighestVideoQa = videoList.first.quality.code;
@@ -915,7 +919,7 @@ class VideoDetailController extends GetxController
         // 如果预设的画质低于当前最高
         targetVideoQa = data.acceptQuality!.findClosestTarget(
           (e) => e <= cacheVideoQa,
-          (a, b) => a > b ? a : b,
+          math.max,
         );
       }
       currentVideoQa.value = VideoQuality.fromCode(targetVideoQa);
@@ -948,6 +952,21 @@ class VideoDetailController extends GetxController
 
       videoUrl = VideoUtils.getCdnUrl(firstVideo.playUrls);
 
+      videoExpiredTimer?.cancel();
+      videoExpiredTimer = null;
+      if (!isFileSource) {
+        if (parseIntOrNull(_ddlRegexp.firstMatch(videoUrl!)?.group(1))
+            case final time? when time > 0) {
+          final durationMs =
+              time * 1000 - DateTime.now().millisecondsSinceEpoch;
+          if (durationMs > 0) {
+            videoExpiredTimer = Timer(Duration(milliseconds: durationMs), () {
+              queryVideoUrl(fromReset: true);
+            });
+          }
+        }
+      }
+
       /// 优先顺序 设置中指定质量 -> 当前可选的最高质量
       AudioItem? firstAudio;
       final audioList = data.dash?.audio;
@@ -974,6 +993,10 @@ class VideoDetailController extends GetxController
       }
       await _initPlayerIfNeeded(autoFullScreenFlag);
     } else {
+      if (videoExpiredTimer?.isActive == false) {
+        videoExpiredTimer = null;
+        Utils.reportError(StateError('debug: unable to refresh when expired.'));
+      }
       _autoPlay.value = false;
       videoState.value = false;
       if (plPlayerController.isFullScreen.value) {
@@ -1239,6 +1262,8 @@ class VideoDetailController extends GetxController
     if (isFileSource) {
       cacheLocalProgress();
     }
+    videoExpiredTimer?.cancel();
+    videoExpiredTimer = null;
     introScrollCtr?.dispose();
     introScrollCtr = null;
     tabCtr.dispose();
@@ -1474,7 +1499,7 @@ class VideoDetailController extends GetxController
         useSafeArea: true,
         isScrollControlled: true,
         constraints: BoxConstraints(
-          maxWidth: min(640, context.mediaQueryShortestSide),
+          maxWidth: math.min(640, context.mediaQueryShortestSide),
         ),
         builder: (context) {
           final maxChildSize =
